@@ -30,6 +30,22 @@ class _FakeQbtHandler(BaseHTTPRequestHandler):
                 params.get("username") == self.server.expected_user
                 and params.get("password") == self.server.expected_pass
             )
+            if self.server.api_version >= 5:
+                # qBittorrent >= 5: 204 (empty) on success, 401 on failure.
+                if ok:
+                    self.send_response(204)
+                    self.send_header("Set-Cookie", "SID=fake; path=/; HttpOnly")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                else:
+                    response = b"Unauthorized"
+                    self.send_response(401)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", str(len(response)))
+                    self.end_headers()
+                    self.wfile.write(response)
+                return
+            # qBittorrent < 5: 200 with "Ok." / "Fails." in the body.
             response = b"Ok." if ok else b"Fails."
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -59,18 +75,23 @@ class _FakeQbtHandler(BaseHTTPRequestHandler):
 
 
 class _FakeQbtServer(HTTPServer):
-    def __init__(self, expected_user: str, expected_pass: str) -> None:
+    def __init__(
+        self, expected_user: str, expected_pass: str, api_version: int
+    ) -> None:
         super().__init__(("127.0.0.1", 0), _FakeQbtHandler)
         self.expected_user = expected_user
         self.expected_pass = expected_pass
+        self.api_version = api_version
         self.login_calls: list[dict[str, str]] = []
         self.set_pref_calls: list[dict[str, str]] = []
         self.last_listen_port: int | None = None
 
 
-@pytest.fixture
-def fake_qbt() -> Any:
-    server = _FakeQbtServer(expected_user="admin", expected_pass="hunter2")
+@pytest.fixture(params=[4, 5], ids=["qbt4", "qbt5"])
+def fake_qbt(request: Any) -> Any:
+    server = _FakeQbtServer(
+        expected_user="admin", expected_pass="hunter2", api_version=request.param
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

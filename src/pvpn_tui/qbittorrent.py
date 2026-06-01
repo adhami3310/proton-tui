@@ -40,11 +40,20 @@ def _login(opener: urllib.request.OpenerDirector, cfg: QBittorrentConfig) -> Non
     try:
         with opener.open(req, timeout=_TIMEOUT) as resp:
             body = resp.read().decode("utf-8", errors="replace").strip()
+    except urllib.error.HTTPError as exc:
+        # qBittorrent >= 5 answers a bad login with 401 (older versions
+        # used 200 + "Fails." instead). urllib raises HTTPError for both
+        # 401 and a banned-IP 403, so treat any 4xx here as a refusal.
+        raise QBittorrentError(
+            f"login refused: HTTP {exc.code} {exc.reason}"
+        ) from exc
     except urllib.error.URLError as exc:
         raise QBittorrentError(f"login failed: {exc.reason}") from exc
-    if body != "Ok.":
-        # qBittorrent returns "Fails." (note the period) for bad creds.
-        raise QBittorrentError(f"login refused: {body!r}")
+    # Success differs by version: qBittorrent < 5 returns 200 + "Ok.",
+    # while >= 5 returns 204 with an empty body. Both reach here, so only
+    # the explicit "Fails." sentinel (old versions) counts as a refusal.
+    if body == "Fails.":
+        raise QBittorrentError("login refused: bad username or password")
 
 
 def _set_listen_port(
